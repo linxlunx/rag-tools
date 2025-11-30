@@ -1,0 +1,4 @@
+.env
+knowledge_base_chunks.json
+knowledge_base_embeddings.npy
+__pycache__
