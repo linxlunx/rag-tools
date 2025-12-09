@@ -1,6 +1,6 @@
 ## Summary
 
-RAG Tooling
+RAG implementation based on https://www.anthropic.com/engineering/contextual-retrieval
 
 ## Setting up the project
 
@@ -14,4 +14,14 @@ $ pip install -r requirements.txt
 - Migrate with alembic
 ```
 $ alembic upgrade head
+```
+
+# Run
+- Store the docs
+```
+$ python main.py --process-docs
+```
+- Ask
+```
+$ python main.py --ask "question"
 ```
