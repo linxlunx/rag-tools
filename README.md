@@ -9,3 +9,9 @@ RAG Tooling
 ```
 $ pip install -r requirements.txt
 ```
+
+## Run migrations
+- Migrate with alembic
+```
+$ alembic upgrade head
+```

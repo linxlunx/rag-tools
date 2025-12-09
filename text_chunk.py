@@ -50,6 +50,19 @@ class GeminiContextualRetrieval:
             })
             
         return chunks
+
+    def ask_gemini(self, prompt: str) -> str:
+        """
+        Use Gemini LLM to generate content based on a prompt.
+        
+        Args:
+            prompt: The prompt string to send to Gemini
+            
+        Returns:
+            Generated text response from Gemini
+        """
+        response = self.gemini_model.generate_content(prompt)
+        return response.text.strip()
     
     def generate_context_for_chunk(
         self,
@@ -77,8 +90,8 @@ Here is the chunk we want to situate within the whole document
 
 Please give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk. Answer only with the succinct context and nothing else."""
         
-        response = self.gemini_model.generate_content(prompt)
-        return response.text.strip()
+        response = self.ask_gemini(prompt)
+        return response
     
     def process_document(self, document: str, doc_metadata: Dict = None) -> List[Dict]:
         """
@@ -121,6 +134,23 @@ Please give a short succinct context to situate this chunk within the overall do
             })
             
         return contextualized_chunks
+    
+    def create_embedding(self, text: str) -> List[float]:
+        """
+        Generate embedding for a single text using Gemini.
+        
+        Args:
+            text: Text to embed
+            
+        Returns:
+            Embedding vector as list of floats
+        """
+        result = genai.embed_content(
+            model="models/text-embedding-004",
+            content=text,
+            task_type="retrieval_document"
+        )
+        return result['embedding']
     
     def create_embeddings(self, chunks: List[Dict]) -> np.ndarray:
         """
@@ -199,11 +229,11 @@ Please give a short succinct context to situate this chunk within the overall do
         
         # Create embeddings
         embeddings = self.create_embeddings(all_chunks)
+
+        print(all_chunks)
         
         # Create BM25 index
         bm25_index = self.create_bm25_index(all_chunks)
-        
-        print("\nPreprocessing complete!")
         
         return {
             'chunks': all_chunks,

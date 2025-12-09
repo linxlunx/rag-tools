@@ -1,52 +1,84 @@
-from config import Config
 from text_chunk import GeminiContextualRetrieval
-from pdf_parser import PdfParser
-import click
-import sys
+from db import DBSession
+from models.chunk import Chunk
 
-@click.command()
-@click.option('--pdf-file', type=click.Path(exists=True), help='Path to the PDF file to process.')
+class RAG:
+    def __init__(self, config):
+        self.config = config
+        self.preprocessor = GeminiContextualRetrieval(
+            google_api_key=self.config.GEMINI_API_KEY,
+            google_model=self.config.GEMINI_MODEL,
+            google_embedding_model=self.config.GEMINI_EMBEDDING_MODEL,
+            chunk_size=800,
+            chunk_overlap=100)
 
+    def process_documents(self, raw_documents):
+        documents = []
+        for page_text in raw_documents:
+            documents.append((page_text[0], page_text[1]))
+        
+        preprocessed_data = self.preprocessor.preprocess_knowledge_base(documents)
 
-def main(pdf_file):
-    config = Config()
-    if not config.GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY is not set in the environment variables.")
-    
-    # Initialize with Gemini API key
-    preprocessor = GeminiContextualRetrieval(
-        google_api_key=config.GEMINI_API_KEY,
-        google_model=config.GEMINI_MODEL,
-        google_embedding_model=config.GEMINI_EMBEDDING_MODEL,
-        chunk_size=800,
-        chunk_overlap=100
-    )
-    
+        with DBSession(self.config.DATABASE_URL) as session:
+            for (c, e) in zip(
+                preprocessed_data['chunks'],
+                preprocessed_data['embeddings']):
+                db_chunk = {
+                    "chunk_index": c['chunk_index'],
+                    "original_text": c['original_text'],
+                    "context": c['context'],
+                    "contextualized_text": c['contextualized_text'],
+                    "embedding": e,
+                    "metadata": c['metadata']
+                }
+                session.store_chunk(db_chunk)
+            session.commit()
+        
+        print("Successfully processed and stored chunks in the database.")
 
-    pdf_parser = PdfParser(file_path=pdf_file)
+    def search_similar(self, query: str, top_k: int = 5):
+        query_embedding = self.preprocessor.create_embedding([query])[0]
 
-    # Read and combine all pages from the PDF
-    documents = []
-    for page_text in pdf_parser.read_pages_generator():
-        documents.append((page_text, {"source": pdf_file}))
-    
-    # Preprocess the knowledge base
-    preprocessed_data = preprocessor.preprocess_knowledge_base(documents)
-    
-    # Save for later use
-    preprocessor.save_preprocessed_data(preprocessed_data, "knowledge_base")
-    
-    # Inspect results
-    print(f"\n{'='*60}")
-    print(f"PREPROCESSING RESULTS")
-    print(f"{'='*60}")
-    print(f"Number of chunks: {len(preprocessed_data['chunks'])}")
-    print(f"Embedding shape: {preprocessed_data['embeddings'].shape}")
-    print(f"\nExample contextualized chunk:")
-    print(f"{'-'*60}")
-    print(preprocessed_data['chunks'][0]['contextualized_text'][:500])
-    print(f"{'-'*60}")
+        with DBSession(self.config.DATABASE_URL) as session:
+            results = session.session.query(
+                Chunk,
+                (1 - Chunk.embedding.cosine_distance(query_embedding)).label('similarity')
+            ).order_by(
+                Chunk.embedding.cosine_distance(query_embedding)
+            ).limit(top_k).all()
+            
+            return [
+                {
+                    'id': chunk.id,
+                    'chunk_index': chunk.chunk_index,
+                    'original_text': chunk.original_text,
+                    'context': chunk.context,
+                    'contextualized_text': chunk.contextualized_text,
+                    'metadata': chunk.meta,
+                    'similarity': float(similarity),
+                    'created_at': chunk.created_at
+                }
+                for chunk, similarity in results
+            ]
+        
+        return results
 
+    def ask_llm(self, question: str, contexts: list) -> str:
+        context = "\n\n".join(
+            f"Chunk {c['chunk_index']}:\n{c['contextualized_text']}"
+            for c in contexts
+        )
 
-if __name__ == "__main__":
-    main()
+        prompt = f"""
+            You are an expert assistant. Answer the question using ONLY the context provided below.
+            If the answer is not in the context, say "I don't know based on the given information."
+
+            Context:
+            {context}
+
+            Question:
+            {question}
+        """
+
+        answer = self.preprocessor.ask_gemini(prompt)
+        return answer
